@@ -1,0 +1,8 @@
+include AUTHORS
+include LICENSE
+include README.rst
+include CHANGELOG.txt
+recursive-include pyscada/mqtt/fixtures *
+recursive-include pyscada/mqtt/templates *
+recursive-exclude * *.pyc
+

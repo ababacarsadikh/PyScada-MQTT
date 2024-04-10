@@ -1,0 +1,3 @@
+*.pyc
+/build/*
+/pyscada_mqtt.egg-info/*
