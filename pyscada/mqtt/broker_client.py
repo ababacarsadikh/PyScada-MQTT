@@ -62,6 +62,7 @@ class Device:
     def request_data(self):
         """process the data that was recived from the broker since last call"""
         output = []
+        keys_to_reset = []
         for variable_id, variable in self.variables.items():
             if self.data[variable.mqttvariable.topic] is not None:
                 value = self.data[variable.mqttvariable.topic].decode("utf-8")
@@ -79,9 +80,8 @@ class Device:
                     timestamp = variable.mqttvariable.parse_timestamp(
                         timestamp
                     )  # convert
-                    self.data[variable.mqttvariable.timestamp_topic] = (
-                        None  # reset value for next loop
-                    )
+
+                    keys_to_reset.append(variable.mqttvariable.timestamp_topic)
 
                 self.data[variable.mqttvariable.topic] = (
                     None  # reset value for next loop, this is done here for the case that we recieved the value, but waiting for the timestamp
@@ -89,7 +89,8 @@ class Device:
 
                 if variable.update_values([value], [timestamp]):
                     output.append(variable)
-
+        for key in keys_to_reset:
+            self.data[key] = None  # reset value for next loop
         return output
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
