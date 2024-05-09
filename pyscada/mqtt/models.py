@@ -8,6 +8,7 @@ from . import PROTOCOL_ID
 import traceback
 
 from django.db import models
+import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,14 @@ class MQTTVariable(models.Model):
             return None
 
         if self.topic_parser is not None:
-            input_value = re.match(self.topic_parser, input_value)
+            try:
+                input_value = re.match(self.topic_parser, input_value)
+                if input_value is None:
+                    return None
+                input_value = input_value[0]
+            except:
+                logger.warning(traceback.format_exc())
+                return None
 
         try:
             return converter(input_value)
