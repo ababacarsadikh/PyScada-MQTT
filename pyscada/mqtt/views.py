@@ -11,7 +11,6 @@ from django.template.loader import get_template
 from django.template.response import TemplateResponse
 
 from pyscada.core import version as core_version
-from pyscada.hmi.views import unauthenticated_redirect
 
 import logging
 
