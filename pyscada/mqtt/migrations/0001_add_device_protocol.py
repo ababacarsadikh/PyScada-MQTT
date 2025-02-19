@@ -16,7 +16,7 @@ def forwards_func(apps, schema_editor):
             "pk": PROTOCOL_ID,
             "description": "MQTT Broker Client",
             "app_name": "pyscada.mqtt",
-            "device_class": "pyscada.mqtt.broker_client",
+            "device_class": "pyscada.mqtt.device",
             "daq_daemon": True,
             "single_thread": True,
         },
