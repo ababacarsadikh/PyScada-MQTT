@@ -38,7 +38,7 @@ class GenericDevice(GenericHandlerDevice):
         self.variables = {}
         self.data = (
             {}
-        )  # holds the raw data for each topic, Value is None if no new data is there
+        ) 
         self.broker = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
         self.broker.on_connect = self.on_connect
         self.broker.on_message = self.on_message
@@ -51,7 +51,7 @@ class GenericDevice(GenericHandlerDevice):
         connect to the MQTT Broker
         """
         status = self.broker.connect(self._address, int(self._port), int(self._timeout))
-        self.broker.loop_start()  # start the comunication thread
+        self.broker.loop_start()
         return status
 
     def _disconnect(self):
@@ -85,25 +85,23 @@ class GenericDevice(GenericHandlerDevice):
                     keys_to_reset.append(variable.mqttvariable.timestamp_topic)
 
                 self.data[variable.mqttvariable.topic] = (
-                    None  # reset value for next loop, this is done here for the case that we recieved the value, but waiting for the timestamp
+                    None  
                 )
 
                 if variable.update_values([value], [timestamp]):
                     output.append(variable)
         for key in keys_to_reset:
-            self.data[key] = None  # reset value for next loop
+            self.data[key] = None 
         return output
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
-        """will be called if the client connects to the broker"""
-        # print(f"Connected with result code {reason_code}") FIXME add logging
         logger.debug(f"mqtt on_connect {reason_code}")
         try:
             for variable in self.device.variable_set.filter(active=1):
                 if not hasattr(variable, "mqttvariable"):
                     continue
                 self.variables[variable.pk] = variable
-                client.subscribe(variable.mqttvariable.topic)  # value Topic
+                client.subscribe(variable.mqttvariable.topic)  
                 self.data[variable.mqttvariable.topic] = None
                 if variable.mqttvariable.timestamp_topic is not None:
                     client.subscribe(
