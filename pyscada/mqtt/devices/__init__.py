@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 from .. import PROTOCOL_ID
 from pyscada.models import DeviceProtocol
@@ -6,139 +7,116 @@ from pyscada.device import GenericHandlerDevice
 from django.conf import settings
 
 try:
-    import paho.mqtt.client as mqtt
+    import paho.mqtt.client as mqtt_client
+
     driver_ok = True
 except ImportError:
     driver_ok = False
 
+from math import isnan, isinf
 from time import time
+from datetime import datetime
 
+import traceback
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 
 class GenericDevice(GenericHandlerDevice):
-    def __init__(self, pyscada_device, variables):
-        super().__init__(pyscada_device, variables)
-        self._protocol = PROTOCOL_ID
-        self.driver_ok = driver_ok
-        self._address = self._device.mqttbroker.address
-        self._port = self._device.mqttbroker.port
-        self._timeout = self._device.mqttbroker.timeout
+    """
+    MQTT Broker (device) class
+    """
+
+    def __init__(self, device):
+        self.device = device
+        self._address = device.mqttbroker.address
+        self._port = device.mqttbroker.port
+        self._timeout = device.mqttbroker.timeout
+        self._device_not_accessible = 0
+        self.variables = {}
         self.data = (
             {}
         )  # holds the raw data for each topic, Value is None if no new data is there
-        self.timestamp = (
-            {}
-        )  # holds timestamp received with a message topic
         self.broker = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
         self.broker.on_connect = self.on_connect
         self.broker.on_message = self.on_message
-        self.broker.username = self._device.mqttbroker.username
-        self.broker.password = self._device.mqttbroker.password
+        self.broker.username = device.mqttbroker.username
+        self.broker.password = device.mqttbroker.password
         self._connect()
 
-    def connect(self):
+    def _connect(self):
         """
-        establish a connection to the Instrument
+        connect to the MQTT Broker
         """
-        super().connect()
-        result = True
+        status = self.broker.connect(self._address, int(self._port), int(self._timeout))
+        self.broker.loop_start()  # start the comunication thread
+        return status
 
+    def _disconnect(self):
+        """
+        close the connection to the MQTT Broker
+        """
+        self.broker.loop_stop()
+
+    def request_data(self):
+        """process the data that was recived from the broker since last call"""
+        output = []
+        keys_to_reset = []
+        for variable_id, variable in self.variables.items():
+            if self.data[variable.mqttvariable.topic] is not None:
+                value = self.data[variable.mqttvariable.topic].decode("utf-8")
+                value = variable.mqttvariable.parse_value(value)
+                timestamp = time()
+
+                if variable.mqttvariable.timestamp_topic is not None:
+                    if self.data[variable.mqttvariable.timestamp_topic] is None:
+                        logger.debug("mqtt request_data timestamp_topic is None")
+                        continue
+
+                    timestamp = self.data[variable.mqttvariable.timestamp_topic].decode(
+                        "utf-8"
+                    )
+                    timestamp = variable.mqttvariable.parse_timestamp(
+                        timestamp
+                    )  # convert
+
+                    keys_to_reset.append(variable.mqttvariable.timestamp_topic)
+
+                self.data[variable.mqttvariable.topic] = (
+                    None  # reset value for next loop, this is done here for the case that we recieved the value, but waiting for the timestamp
+                )
+
+                if variable.update_values([value], [timestamp]):
+                    output.append(variable)
+        for key in keys_to_reset:
+            self.data[key] = None  # reset value for next loop
+        return output
+
+    def on_connect(self, client, userdata, flags, reason_code, properties):
+        """will be called if the client connects to the broker"""
+        # print(f"Connected with result code {reason_code}") FIXME add logging
+        logger.debug(f"mqtt on_connect {reason_code}")
         try:
-            self.broker.connect(
-                self._device.mqttbroker.address,
-                int(self._device.mqttbroker.port),
-                int(self._device.mqttbroker.timeout),
-            )
-
-            self.mqtt_client.loop_start()
-            logger.info("Connected MQTT .")
-        except Exception as e:
-            self._not_accessible_reason = f"Error MQTT connection: {e}"
-            result = False
-
-        return result
-
-    def disconnect(self):
-        """
-        disconnect to the Instrument
-        """
-        if self.broker:
-            self.broker.loop_stop()
-            self.broker.disconnect()
-            logger.info("Disconnected from MQTT.")
-            return True
-        return False
-
-
-    def on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
-            logger.info("connected to MQTTs.")
-            for variable in self._variables:
-                client.subscribe(variable.mqttvariable.topic)
+            for variable in self.device.variable_set.filter(active=1):
+                if not hasattr(variable, "mqttvariable"):
+                    continue
+                self.variables[variable.pk] = variable
+                client.subscribe(variable.mqttvariable.topic)  # value Topic
                 self.data[variable.mqttvariable.topic] = None
                 if variable.mqttvariable.timestamp_topic is not None:
                     client.subscribe(
                         variable.mqttvariable.timestamp_topic
                     )  # timestamp Topic
                     self.data[variable.mqttvariable.timestamp_topic] = None
-        else:
-            logger.warning(f"Not connected to MQTT, code : {rc}")
+        except:
+            logger.warning(traceback.format_exc())
 
-    def on_message(self, client, userdata, message):
+    def on_message(self, client, userdata, msg):
         """callback for new PUBLISH messages, is called on receive from Server"""
-        logger.info(f"Message received {message.topic}: {message.payload.decode("utf-8")}")
+        logger.debug(msg.topic + " " + str(msg.payload))
         if msg.topic not in self.data:
             return
         self.data[msg.topic] = msg.payload
-        if msg.timestamp:
-            self.timestamp[msg.topic] = msg.timestamp
 
-    def read_data_and_time(self, variable_instance):
-        value = None
-        timestamp = self.time()
-        keys_to_reset = []
-        if variable_instance.mqttvariable.topic in self.data:
-            value = self.data[variable_instance.mqttvariable.topic].decode("utf-8")
-            value = variable_instance.mqttvariable.parse_value(value)
-
-            if variable_instance.mqttvariable.timestamp_topic is not None:
-                if variable_instance.mqttvariable.timestamp_topice in self.data:
-                    logger.debug(f"mqtt read_data {variable_instance.mqttvariable.timestamp_topic} is None")
-                    continue
-
-                timestamp = self.data[variable_instance.mqttvariable.timestamp_topic].decode(
-                    "utf-8"
-                )
-                timestamp = variable_instance.mqttvariable.parse_timestamp(
-                    timestamp
-                )  # convert
-
-                keys_to_reset.append(variable_instance.mqttvariable.timestamp_topic)
-            elif variable_instance.mqttvariable.topic in self.timestamp:
-                timestamp = self.timestamp[ variable_instance.mqttvariable.topic]
-
-            self.data[variable_instance.mqttvariable.topic] = (
-                None  # reset value for next loop, this is done here for the case that we recieved the value, but waiting for the timestamp
-            )
-        for key in keys_to_reset:
-            self.data[key] = None  # reset value for next loop
-            
-        return value, timestamp
-            
-    def write_data(self, variable_id, value, task):
-        if self.connect() and variable_id in self._variables:
-            topic = self._variables[variable_id].mqttvariable.topic
-            timestamp_topic = self._variables[variable_id].mqttvariable.timestamp_topic
-            if self.broker:
-                self.broker.publish(topic, value)
-                logger.info(f"Publish to {topic}: {value}")
-                self.write_timestamp(variable_id, value, task)
-        return value
-
-    def write_timestamp(self, variable_id, value, task):
-        timestamp_topic = self._variables[variable_id].mqttvariable.timestamp_topic
-        if timestamp_topic is not None:
-            self.broker.publish(timestamp_topic, self.time())
